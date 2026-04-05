@@ -1,0 +1,104 @@
+# compiled output
+/dist
+/node_modules
+/build
+uploadtimes-2d6d3-firebase-adminsdk-8reyp-4f7ecf3bfd.json
+#constants
+./src/auth/constants.ts
+
+#config
+./src/config/key.ts
+
+*.pem
+# Logs
+logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+
+# OS
+.DS_Store
+
+# Tests
+/coverage
+/.nyc_output
+
+# IDEs and editors
+/.idea
+.project
+.classpath
+.c9/
+*.launch
+.settings/
+*.sublime-workspace
+
+# IDE - VSCode
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+
+# dotenv environment variable files
+.env
+.env.development.local
+.env.test.local
+.env.production.local
+.env.local
+
+# temp directory
+.temp
+.tmp
+
+# Runtime data
+pids
+*.pid
+*.seed
+*.pid.lock
+
+# Diagnostic reports (https://nodejs.org/api/report.html)
+report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
+groreelspostmancollection.json
+ACCOUNT_CONNECT_README.md
+ANALYTICS_SERVICES_ANALYSIS.md
+MANAGEMENT_ENDPOINTS_README.md
+MANAGEMENT_OAUTH_CALLBACK_APPROACH.md
+IMPLEMENTED_FEATURES_README.md
+test-goals-api.js
+ENDPOINTS_GUIDE.md
+V2_API_DOCUMENTATION.md
+i
+*.js
+ENHANCED_ANALYTICS_IMPLEMENTATION_SUMMARY.md
+ENHANCED_ANALYTICS_POSTMAN_GUIDE.md
+ENHANCED_IMPLEMENTATION_SUMMARY.md
+ENHANCED_NICHE_ANALYZER_GUIDE.md
+MODULE_FIX_SUMMARY.md
+PROFILESCOUT_FIX_SUMMARY.md
+DOCKER_BUILD_TROUBLESHOOTING.md
+ANONYMOUS_PROFILE_SCOUT_ARCHITECTURE.md
+CLEANED_DEMOGRAPHICS_SYSTEM.md
+FINAL_DEMOGRAPHICS_SYSTEM_SUMMARY.md
+POSTMAN_DEMOGRAPHICS_TESTING.md
+USERNAME_SEARCH_IMPROVEMENTS.md
+USERNAME_VALIDATION_FIX.md
+YOUTUBE_API_COUNTRY_COMPATIBILITY.md
+.env.backup
+AI_ENHANCED_RECOMMENDATIONS_GUIDE.md
+VIRLO_AI_ENHANCEMENT_GUIDE.md
+BOOKMARK_IDEAS_FEATURE.md
+ACCOUNT_CONNECT_README.md
+CHANNEL_RESOLUTION_FIX.md
+ANALYTICS_SERVICES_ANALYSIS.md
+YOUTUBE_ISSUES_ANALYSIS.md
+YOUTUBE_INTEGRATION_GUIDE.md
+YOUTUBE_ANALYTICS_FEATURES.md
+TIKTOK_COMMENT_SCRAPING_GUIDE.md
+MULTI_PROVIDER_API_IMPLEMENTATION.md
+C*.md
+P*.md
+Q*.md
+....

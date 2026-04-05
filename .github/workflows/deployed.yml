@@ -1,0 +1,715 @@
+name: Deploy NestJS to AWS EC2 using GHCR
+
+on:
+  push:
+    branches:
+      - master
+      - main
+  pull_request:
+    branches:
+      - master
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      EC2_HOST: "13.53.84.76"
+      DOMAIN_NAME: "uat.groreels.com"
+      OWNER: "isodevmate"
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Debug Environment
+        run: |
+          echo "GitHub Actor: ${{ github.actor }}"
+          echo "Repository: ${{ github.repository }}"
+          echo "Event: ${{ github.event_name }}"
+          echo "Ref: ${{ github.ref }}"
+          echo "Has GHCR_TOKEN: ${{ secrets.GHCR_TOKEN != '' }}"
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GHCR_TOKEN }}
+        continue-on-error: true
+        id: docker-login
+
+      - name: Alternative Login with PAT Token
+        if: steps.docker-login.outcome == 'failure'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GHCR_TOKEN }}
+        continue-on-error: true
+        id: docker-login-pat
+
+      - name: Manual Login Fallback
+        if: steps.docker-login.outcome == 'failure' && steps.docker-login-pat.outcome == 'failure'
+        run: |
+          echo "Attempting manual authentication method..."
+          if [ -n "${{ secrets.GHCR_TOKEN }}" ]; then
+            echo "${{ secrets.GHCR_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          else
+            echo "No GHCR_TOKEN found, trying with GHCR_TOKEN..."
+            echo "${{ secrets.GHCR_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          fi
+        continue-on-error: true
+        id: docker-login-manual
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ghcr.io/${{ env.OWNER }}/socialsandlinks-backend:latest
+          cache-from: type=registry,ref=ghcr.io/${{ env.OWNER }}/socialsandlinks-backend:buildcache
+          cache-to: type=registry,ref=ghcr.io/${{ env.OWNER }}/socialsandlinks-backend:buildcache,mode=max
+          build-args: |
+            NODE_OPTIONS=--max-old-space-size=4096
+          platforms: linux/amd64
+          provenance: false
+        continue-on-error: true
+        id: docker-build
+
+      - name: Retry Docker build on failure
+        if: steps.docker-build.outcome == 'failure'
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ghcr.io/${{ env.OWNER }}/socialsandlinks-backend:latest
+          cache-from: type=registry,ref=ghcr.io/${{ env.OWNER }}/socialsandlinks-backend:buildcache
+          cache-to: type=registry,ref=ghcr.io/${{ env.OWNER }}/socialsandlinks-backend:buildcache,mode=max
+          build-args: |
+            NODE_OPTIONS=--max-old-space-size=4096
+          platforms: linux/amd64
+          provenance: false
+        continue-on-error: true
+        id: docker-build-retry
+
+      - name: Check Docker build success
+        if: steps.docker-build.outcome == 'failure' && steps.docker-build-retry.outcome == 'failure'
+        run: |
+          echo "Docker build failed after retry. Checking authentication status..."
+          echo "Docker login status: ${{ steps.docker-login.outcome }}"
+          echo "Docker login PAT status: ${{ steps.docker-login-pat.outcome }}"
+          echo "Docker login manual status: ${{ steps.docker-login-manual.outcome }}"
+          echo "Docker build status: ${{ steps.docker-build.outcome }}"
+          echo "Docker build retry status: ${{ steps.docker-build-retry.outcome }}"
+
+          echo "Checking GitHub Container Registry connectivity..."
+          curl -I https://ghcr.io/v2/ || echo "GHCR connectivity check failed"
+
+          echo "Checking Docker daemon status..."
+          docker version || echo "Docker daemon check failed"
+
+          echo "Checking available disk space..."
+          df -h || echo "Disk space check failed"
+
+          echo "Checking Docker buildx status..."
+          docker buildx ls || echo "Docker buildx check failed"
+
+          exit 1
+
+      - name: Setup SSH
+        run: |
+          echo "${{ secrets.EC2_SSH_KEY }}" > key.pem
+          chmod 600 key.pem
+
+      - name: Deploy to EC2
+        if: steps.docker-build.outcome == 'success' || steps.docker-build-retry.outcome == 'success'
+        env:
+          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
+          DOMAIN: ${{ env.DOMAIN_NAME }}
+          REPOSITORY_OWNER: ${{ env.OWNER }}
+          EMAIL_HOST: ${{ secrets.EMAIL_HOST }}
+          EMAIL_PORT: ${{ secrets.EMAIL_PORT }}
+          EMAIL_USER: ${{ secrets.EMAIL_USER }}
+          EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
+          SENDGRID_API_KEY: ${{ secrets.SENDGRID_API_KEY }}
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          LINKEDIN_CLIENT_ID: ${{ secrets.LINKEDIN_CLIENT_ID }}
+          LINKEDIN_CLIENT_SECRET: ${{ secrets.LINKEDIN_CLIENT_SECRET }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_BUCKET_NAME: ${{ secrets.AWS_BUCKET_NAME }}
+          STRIPE_PUBLIC_KEY: ${{ secrets.STRIPE_PUBLIC_KEY }}
+          STRIPE_CLIENT_ID: ${{ secrets.STRIPE_CLIENT_ID }}
+          TIKTOK_CLIENT_SECRET: ${{ secrets.TIKTOK_CLIENT_SECRET }}
+          STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
+          TIKTOK_CLIENT_KEY: ${{ secrets.TIKTOK_CLIENT_KEY }}
+          TIKTOK_REDIRECT_URI: ${{ secrets.TIKTOK_REDIRECT_URI }}
+          PAYSTACK_PUBLIC_KEY: ${{ secrets.PAYSTACK_PUBLIC_KEY }}
+          PAYSTACK_SECRET_KEY: ${{ secrets.PAYSTACK_SECRET_KEY }}
+          INSTAGRAM_CLIENT_ID: ${{ secrets.INSTAGRAM_CLIENT_ID }}
+          INSTAGRAM_REDIRECT_URI: ${{ secrets.INSTAGRAM_REDIRECT_URI }}
+          DID_API_KEY: ${{ secrets.DID_API_KEY }}
+          ELEVEN_LABS_API_KEY: ${{ secrets.ELEVEN_LABS_API_KEY }}
+          STABILITY_AI_API_KEY: ${{ secrets.STABILITY_AI_API_KEY }}
+          YOUTUBE_REDIRECT_URI: ${{ secrets.YOUTUBE_REDIRECT_URI }}
+          YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
+          YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
+          SYSTEM_YOUTUBE_USER_ID: ${{ secrets.SYSTEM_YOUTUBE_USER_ID }}
+          INSTAGRAM_CLIENT_SECRET: ${{ secrets.INSTAGRAM_CLIENT_SECRET }}
+          REDIS_URL: ${{ secrets.REDIS_URL }}
+          LINKEDIN_REDIRECT_URI_V2: ${{ secrets.LINKEDIN_REDIRECT_URI_V2 }}
+          INSTAGRAM_REDIRECT_URI_V2: ${{ secrets.INSTAGRAM_REDIRECT_URI_V2 }}
+          TIKTOK_REDIRECT_URI_V2: ${{ secrets.TIKTOK_REDIRECT_URI_V2 }}
+          YOUTUBE_REDIRECT_URI_V2: ${{ secrets.YOUTUBE_REDIRECT_URI_V2 }}
+          TIKTOK_MANAGEMENT_REDIRECT_URI_V2: ${{ secrets.TIKTOK_MANAGEMENT_REDIRECT_URI_V2 }}
+          YOUTUBE_MANAGEMENT_REDIRECT_URI_V2: ${{ secrets.YOUTUBE_MANAGEMENT_REDIRECT_URI_V2 }}
+          LINKEDIN_MANAGEMENT_REDIRECT_URI_V2: ${{ secrets.LINKEDIN_MANAGEMENT_REDIRECT_URI_V2 }}
+          INSTAGRAM_MANAGEMENT_REDIRECT_URI_V2: ${{ secrets.INSTAGRAM_MANAGEMENT_REDIRECT_URI_V2 }}
+          YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
+          PUPPETEER_HEADLESS: ${{ secrets.PUPPETEER_HEADLESS }}
+          BROWSER_DEBUG: ${{ secrets.BROWSER_DEBUG }}
+          SCRAPING_DELAY_MIN: ${{ secrets.SCRAPING_DELAY_MIN }}
+          SCRAPING_DELAY_MAX: ${{ secrets.SCRAPING_DELAY_MAX }}
+          MAX_SCRAPING_ATTEMPTS: ${{ secrets.MAX_SCRAPING_ATTEMPTS }}
+        run: |
+          # Create deployment script
+          cat > deploy.sh << 'EOC'
+          #!/bin/bash
+          set -e
+
+          echo "Starting deployment process..."
+          echo "Debug: GHCR_TOKEN length in GitHub Actions: ${#GHCR_TOKEN}"
+          echo "Debug: REPOSITORY_OWNER: $REPOSITORY_OWNER"
+          echo "Debug: DOMAIN: $DOMAIN"
+
+          # Hardcoded the image name to avoid variable expansion issues
+          IMAGE_NAME="ghcr.io/isodevmate/socialsandlinks-backend:latest"
+          REPOSITORY_OWNER="isodevmate"
+
+          echo "GHCR Token length: ${#GHCR_TOKEN}"
+          if [ -n "$GHCR_TOKEN" ]; then
+            echo "GHCR Token is set"
+          else
+            echo "GHCR Token is not set"
+            exit 1
+          fi
+
+          echo "Using image: $IMAGE_NAME"
+
+          # Update system packages
+          sudo dnf update -y
+
+          # Install required packages including cron
+          echo "Installing required packages..."
+          sudo dnf install -y nginx docker cronie
+
+          # Enable and start services
+          sudo systemctl enable nginx docker crond
+          sudo systemctl start nginx docker crond
+
+          # Add current user to docker group and refresh group membership
+          sudo usermod -aG docker ec2-user
+
+          # Create a separate script for Docker commands to avoid quoting issues
+          cat > docker_commands.sh << 'DOCKER_EOF'
+          #!/bin/bash
+          set -e
+
+          echo "Running Docker commands with proper group membership..."
+
+          # Check if GHCR_TOKEN is available
+          if [ -z "$GHCR_TOKEN" ]; then
+            echo "Error: GHCR_TOKEN is empty in docker group context"
+            exit 1
+          fi
+
+          # DISK SPACE CHECK
+          echo "=== DISK SPACE CHECK ==="
+          df -h
+          echo "Docker disk usage:"
+          docker system df || true
+
+          # Check available space (in KB)
+          AVAILABLE_SPACE=$(df / | tail -1 | awk '{print $4}')
+          if [ "$AVAILABLE_SPACE" -lt 3145728 ]; then  # Less than 3GB
+              echo "WARNING: Less than 3GB free space available!"
+              echo "Performing comprehensive cleanup..."
+
+              # Stop and remove existing container
+              docker stop nestjs-app 2>/dev/null || true
+              docker rm nestjs-app 2>/dev/null || true
+
+                            # Comprehensive port 3000 cleanup
+              echo "Cleaning up port 3000..."
+              docker ps -q --filter "publish=3000" | xargs -r docker stop || true
+              docker ps -aq --filter "publish=3000" | xargs -r docker rm || true
+              if command -v lsof >/dev/null 2>&1; then
+                sudo lsof -t -i :3000 | xargs -r sudo kill -9 || true
+              fi
+              docker ps -a --format "{{.ID}} {{.Names}}" | grep -E "(nestjs|app)" | awk '{print $1}' | xargs -r docker rm -f || true
+
+              # Comprehensive cleanup
+              echo "Removing all unused Docker resources..."
+              docker system prune -a -f --volumes || true
+
+              # Remove old versions of our specific image
+              echo "Removing old versions of application image..."
+              docker images --format "{{.Repository}}:{{.Tag}} {{.ID}}" | grep "socialsandlinks-backend" | grep -v "latest" | awk '{print $2}' | xargs -r docker rmi -f || true
+
+              # Clean system cache
+              sudo dnf clean all || true
+              sudo journalctl --vacuum-time=7d || true
+
+              echo "After cleanup:"
+              df -h
+              docker system df || true
+          else
+              echo "Sufficient disk space available"
+              # Regular cleanup
+              docker stop nestjs-app 2>/dev/null || true
+              docker rm nestjs-app 2>/dev/null || true
+              # Prune images older than 15 minutes (for testing)
+              docker image prune -a -f --filter "until=15m" || true
+          fi
+
+                    # Comprehensive port 3000 cleanup for Amazon Linux
+          echo "=== PORT 3000 CLEANUP ==="
+
+          # Check what's using port 3000
+          echo "Checking what's using port 3000..."
+
+          # Option A: Check Docker containers using port 3000
+          echo "Docker containers using port 3000:"
+          docker ps --format "table {{.ID}}\t{{.Names}}\t{{.Ports}}" | grep ":3000" || echo "No Docker containers using port 3000"
+
+          # Option B: Check any process using port 3000
+          echo "System processes using port 3000:"
+          if command -v lsof >/dev/null 2>&1; then
+            sudo lsof -i :3000 || echo "No processes found using lsof"
+          else
+            echo "lsof not available, trying netstat..."
+            sudo netstat -tulnp | grep 3000 || echo "No processes found using netstat"
+          fi
+
+          # Stop and remove Docker containers using port 3000
+          echo "Stopping Docker containers using port 3000..."
+          docker ps -q --filter "publish=3000" | xargs -r docker stop || true
+          docker ps -aq --filter "publish=3000" | xargs -r docker rm || true
+
+          # Kill any local processes using port 3000
+          echo "Killing local processes using port 3000..."
+          if command -v lsof >/dev/null 2>&1; then
+            sudo lsof -t -i :3000 | xargs -r sudo kill -9 || true
+          else
+            # Fallback to netstat method
+            PIDS=$(sudo netstat -tulnp | grep ":3000 " | awk '{print $7}' | cut -d'/' -f1 | grep -v '-' || true)
+            if [ -n "$PIDS" ]; then
+              echo "Killing PIDs: $PIDS"
+              echo "$PIDS" | xargs -r sudo kill -9 || true
+            fi
+          fi
+
+          # Remove any stopped containers with app-related names
+          echo "Removing stopped containers..."
+          docker ps -a --format "{{.ID}} {{.Names}}" | grep -E "(nestjs|app)" | awk '{print $1}' | xargs -r docker rm -f || true
+
+          # Wait a moment for ports to be released
+          echo "Waiting for ports to be released..."
+          sleep 3
+
+          # Final check
+          echo "Final port 3000 check:"
+          if command -v lsof >/dev/null 2>&1; then
+            sudo lsof -i :3000 || echo "Port 3000 is now free"
+          else
+            sudo netstat -tulnp | grep 3000 || echo "Port 3000 is now free"
+          fi
+
+
+          # Clean up any existing Docker credentials to avoid conflicts
+          echo "Cleaning up Docker credentials..."
+          docker logout ghcr.io 2>/dev/null || true
+          rm -f ~/.docker/config.json 2>/dev/null || true
+
+          # Login to GitHub Container Registry
+          echo "Logging into GitHub Container Registry..."
+          if echo "$GHCR_TOKEN" | docker login ghcr.io -u "isodevmate" --password-stdin; then
+            echo "Docker login successful"
+          else
+            echo "Docker login failed"
+            echo "Attempting to debug login issue..."
+            echo "GHCR_TOKEN length: ${#GHCR_TOKEN}"
+            echo "Docker version: $(docker --version)"
+            exit 1
+          fi
+
+          # Pull Docker image
+          IMAGE_NAME="ghcr.io/isodevmate/socialsandlinks-backend:latest"
+          echo "Pulling Docker image: $IMAGE_NAME"
+
+          if ! docker pull "$IMAGE_NAME"; then
+            echo "Failed to pull Docker image"
+            echo "Current disk space:"
+            df -h
+            echo "Available Docker images:"
+            docker images | grep ghcr.io || true
+            exit 1
+          fi
+
+          # Create network if it does not exist
+          echo "Creating Docker network..."
+          docker network create app-network 2>/dev/null || true
+
+          # Run the container with optimized settings
+          echo "Starting Docker container..."
+          if ! docker run -d \
+            --name nestjs-app \
+            --network app-network \
+            --restart unless-stopped \
+            --memory=1.5g \
+            --memory-swap=2g \
+            --oom-kill-disable=false \
+            --log-driver json-file \
+            --log-opt max-size=10m \
+            --log-opt max-file=3 \
+            -p 3000:3000 \
+            -e NODE_ENV=production \
+            -e NODE_OPTIONS="--max-old-space-size=4096" \
+            -e FRONTEND_URL="https://$DOMAIN" \
+            -e PORT=3000 \
+            -e EMAIL_HOST="$EMAIL_HOST" \
+            -e EMAIL_PORT="$EMAIL_PORT" \
+            -e EMAIL_USER="$EMAIL_USER" \
+            -e EMAIL_PASSWORD="$EMAIL_PASSWORD" \
+            -e SENDGRID_API_KEY="$SENDGRID_API_KEY" \
+            -e JWT_SECRET="$JWT_SECRET" \
+            -e LINKEDIN_CLIENT_ID="$LINKEDIN_CLIENT_ID" \
+            -e LINKEDIN_CLIENT_SECRET="$LINKEDIN_CLIENT_SECRET" \
+            -e OPENAI_API_KEY="$OPENAI_API_KEY" \
+            -e AWS_REGION="$AWS_REGION" \
+            -e AWS_ACCESS_KEY_ID="$AWS_ACCESS_KEY_ID" \
+            -e AWS_SECRET_ACCESS_KEY="$AWS_SECRET_ACCESS_KEY" \
+            -e AWS_BUCKET_NAME="$AWS_BUCKET_NAME" \
+            -e STRIPE_PUBLIC_KEY="$STRIPE_PUBLIC_KEY" \
+            -e STRIPE_CLIENT_ID="$STRIPE_CLIENT_ID" \
+            -e TIKTOK_CLIENT_SECRET="$TIKTOK_CLIENT_SECRET" \
+            -e STRIPE_SECRET_KEY="$STRIPE_SECRET_KEY" \
+            -e TIKTOK_CLIENT_KEY="$TIKTOK_CLIENT_KEY" \
+            -e TIKTOK_REDIRECT_URI="$TIKTOK_REDIRECT_URI" \
+            -e PAYSTACK_PUBLIC_KEY="$PAYSTACK_PUBLIC_KEY" \
+            -e PAYSTACK_SECRET_KEY="$PAYSTACK_SECRET_KEY" \
+            -e INSTAGRAM_CLIENT_ID="$INSTAGRAM_CLIENT_ID" \
+            -e INSTAGRAM_REDIRECT_URI="$INSTAGRAM_REDIRECT_URI" \
+            -e ELEVEN_LABS_API_KEY="$ELEVEN_LABS_API_KEY" \
+            -e STABILITY_AI_API_KEY="$STABILITY_AI_API_KEY" \
+            -e YOUTUBE_REDIRECT_URI="$YOUTUBE_REDIRECT_URI" \
+            -e YOUTUBE_CLIENT_ID="$YOUTUBE_CLIENT_ID" \
+            -e YOUTUBE_CLIENT_SECRET="$YOUTUBE_CLIENT_SECRET" \
+            -e INSTAGRAM_CLIENT_SECRET="$INSTAGRAM_CLIENT_SECRET" \
+            -e REDIS_URL="$REDIS_URL" \
+            -e SENDGRID_API_KEY="$SENDGRID_API_KEY" \
+            -e SYSTEM_YOUTUBE_USER_ID="$SYSTEM_YOUTUBE_USER_ID" \
+            -e LINKEDIN_REDIRECT_URI_V2="$LINKEDIN_REDIRECT_URI_V2" \
+            -e INSTAGRAM_REDIRECT_URI_V2="$INSTAGRAM_REDIRECT_URI_V2" \
+            -e TIKTOK_REDIRECT_URI_V2="$TIKTOK_REDIRECT_URI_V2" \
+            -e YOUTUBE_REDIRECT_URI_V2="$YOUTUBE_REDIRECT_URI_V2" \
+            -e TIKTOK_MANAGEMENT_REDIRECT_URI_V2="$TIKTOK_MANAGEMENT_REDIRECT_URI_V2" \
+            -e YOUTUBE_MANAGEMENT_REDIRECT_URI_V2="$YOUTUBE_MANAGEMENT_REDIRECT_URI_V2" \
+            -e LINKEDIN_MANAGEMENT_REDIRECT_URI_V2="$LINKEDIN_MANAGEMENT_REDIRECT_URI_V2" \
+            -e INSTAGRAM_MANAGEMENT_REDIRECT_URI_V2="$INSTAGRAM_MANAGEMENT_REDIRECT_URI_V2" \
+            -e YOUTUBE_API_KEY="$YOUTUBE_API_KEY" \
+            -e PUPPETEER_HEADLESS="$PUPPETEER_HEADLESS" \
+            -e BROWSER_DEBUG="$BROWSER_DEBUG" \
+            -e SCRAPING_DELAY_MIN="$SCRAPING_DELAY_MIN" \
+            -e SCRAPING_DELAY_MAX="$SCRAPING_DELAY_MAX" \
+            -e MAX_SCRAPING_ATTEMPTS="$MAX_SCRAPING_ATTEMPTS" \
+            "$IMAGE_NAME"; then
+            echo "Failed to start Docker container"
+            echo "Final disk space:"
+            df -h
+            exit 1
+          fi
+
+          # Wait for container to start
+          echo "Waiting for container to start..."
+          sleep 30
+
+          # Check container status
+          echo "Container status:"
+          if ! docker ps -a | grep nestjs-app; then
+            echo "Container not found"
+            exit 1
+          fi
+
+          echo "Container logs (last 50 lines):"
+          docker logs --tail 50 nestjs-app || true
+
+          echo "Final disk usage:"
+          df -h
+          DOCKER_EOF
+
+          # Make the docker script executable
+          chmod +x docker_commands.sh
+
+          # Execute the docker commands with proper group membership
+          sg docker -c './docker_commands.sh'
+
+          # Check if app is responding
+          echo "Checking if application is responding..."
+          HEALTH_CHECK_SUCCESS=false
+          for i in {1..30}; do
+            if curl -f http://localhost:3000/api/health > /dev/null 2>&1; then
+              echo "Application is responding - Health check passed!"
+              HEALTH_CHECK_SUCCESS=true
+              break
+            elif curl -f http://localhost:3000/ > /dev/null 2>&1; then
+              echo "Application is responding on root endpoint!"
+              HEALTH_CHECK_SUCCESS=true
+              break
+            fi
+            echo "Waiting for application to respond... attempt $i"
+            echo "Last error:"
+            curl -v http://localhost:3000/api/health 2>&1 || true
+            sleep 10
+          done
+
+          if [ "$HEALTH_CHECK_SUCCESS" = false ]; then
+            echo "Health check failed. Full container logs:"
+            sg docker -c 'docker logs nestjs-app'
+            echo "Container inspect:"
+            sg docker -c 'docker inspect nestjs-app'
+            exit 1
+          fi
+
+          # Remove existing Nginx configuration
+          sudo rm -f /etc/nginx/conf.d/app.conf
+          sudo rm -f /etc/nginx/sites-enabled/default 2>/dev/null || true
+
+          # Create Nginx configuration with proper variable substitution
+          echo "Creating Nginx configuration for domain: $DOMAIN"
+
+          # Use a different approach for nginx config to avoid envsubst issues
+          sudo bash -c "cat > /etc/nginx/conf.d/app.conf << 'NGINX_EOF'
+          server {
+              listen 80;
+              server_name $DOMAIN www.$DOMAIN;
+
+              # Create webroot directory for Let's Encrypt
+              location /.well-known/acme-challenge/ {
+                  root /var/www/html;
+                  allow all;
+              }
+
+              location / {
+                  proxy_pass http://localhost:3000;
+                  proxy_http_version 1.1;
+                  proxy_set_header Upgrade \\\$http_upgrade;
+                  proxy_set_header Connection \"upgrade\";
+                  proxy_set_header Host \\\$host;
+                  proxy_set_header X-Real-IP \\\$remote_addr;
+                  proxy_set_header X-Forwarded-For \\\$proxy_add_x_forwarded_for;
+                  proxy_set_header X-Forwarded-Proto \\\$scheme;
+                  proxy_cache_bypass \\\$http_upgrade;
+                  proxy_read_timeout 86400;
+                  proxy_connect_timeout 60s;
+                  proxy_send_timeout 60s;
+              }
+          }
+          NGINX_EOF"
+
+          # Test Nginx configuration
+          echo "Testing Nginx configuration..."
+          if ! sudo nginx -t; then
+            echo "Error: Nginx configuration test failed"
+            echo "Nginx configuration content:"
+            sudo cat /etc/nginx/conf.d/app.conf
+            exit 1
+          fi
+
+          # Restart Nginx
+          echo "Restarting Nginx..."
+          sudo systemctl restart nginx
+
+          # Verify Nginx is running
+          if ! sudo systemctl is-active --quiet nginx; then
+            echo "Error: Nginx failed to start"
+            sudo systemctl status nginx
+            exit 1
+          fi
+
+          # Create webroot directory and set permissions
+          sudo mkdir -p /var/www/html
+          sudo chown -R nginx:nginx /var/www/html
+          sudo chmod -R 755 /var/www/html
+
+          # Install Certbot
+          echo "Installing Certbot..."
+          if sudo dnf install -y certbot python3-certbot-nginx; then
+            echo "Certbot installed successfully via dnf"
+          else
+            echo "DNF installation failed, trying snap method..."
+            if ! command -v snap &> /dev/null; then
+              sudo dnf install -y snapd
+              sudo systemctl enable --now snapd.socket
+              sudo ln -sf /var/lib/snapd/snap /snap
+              sleep 10
+            fi
+
+            sudo snap install core; sudo snap refresh core
+            sudo snap install --classic certbot
+            sudo ln -sf /snap/bin/certbot /usr/bin/certbot
+            echo "Certbot installed successfully via snap"
+          fi
+
+          # Test domain accessibility before requesting certificate
+          echo "Testing domain accessibility..."
+          if ! curl -I -s -f "http://$DOMAIN" > /dev/null; then
+            echo "Warning: Domain $DOMAIN is not accessible via HTTP. SSL certificate installation may fail."
+            echo "Make sure your domain DNS points to this server's IP address."
+          fi
+
+          # Obtain SSL certificate with more specific error handling
+          echo "Obtaining SSL certificate for ${DOMAIN}..."
+          SSL_SUCCESS=false
+
+          # First try with nginx plugin
+          if sudo certbot --nginx --non-interactive --agree-tos -m oumabarack5827@gmail.com -d "$DOMAIN" -d "www.$DOMAIN" --redirect; then
+            echo "SSL certificate installed successfully with nginx plugin"
+            SSL_SUCCESS=true
+          else
+            echo "Nginx plugin failed, trying webroot method..."
+            # Try webroot method as fallback
+            if sudo certbot certonly --webroot -w /var/www/html --non-interactive --agree-tos -m oumabarack5827@gmail.com -d "$DOMAIN" -d "www.$DOMAIN"; then
+              echo "SSL certificate obtained with webroot method"
+
+              # Manually update Nginx configuration for HTTPS
+              sudo bash -c "cat > /etc/nginx/conf.d/app.conf << 'NGINX_HTTPS_EOF'
+              server {
+                  listen 80;
+                  server_name $DOMAIN www.$DOMAIN;
+                  return 301 https://\\\$server_name\\\$request_uri;
+              }
+
+              server {
+                  listen 443 ssl http2;
+                  server_name $DOMAIN www.$DOMAIN;
+
+                  ssl_certificate /etc/letsencrypt/live/$DOMAIN/fullchain.pem;
+                  ssl_certificate_key /etc/letsencrypt/live/$DOMAIN/privkey.pem;
+
+                  # Modern SSL configuration
+                  ssl_protocols TLSv1.2 TLSv1.3;
+                  ssl_ciphers ECDHE-RSA-AES256-GCM-SHA512:DHE-RSA-AES256-GCM-SHA512:ECDHE-RSA-AES256-GCM-SHA384:DHE-RSA-AES256-GCM-SHA384;
+                  ssl_prefer_server_ciphers off;
+                  ssl_session_cache shared:SSL:10m;
+                  ssl_session_timeout 10m;
+
+                  location /.well-known/acme-challenge/ {
+                      root /var/www/html;
+                      allow all;
+                  }
+
+                  location / {
+                      proxy_pass http://localhost:3000;
+                      proxy_http_version 1.1;
+                      proxy_set_header Upgrade \\\$http_upgrade;
+                      proxy_set_header Connection \"upgrade\";
+                      proxy_set_header Host \\\$host;
+                      proxy_set_header X-Real-IP \\\$remote_addr;
+                      proxy_set_header X-Forwarded-For \\\$proxy_add_x_forwarded_for;
+                      proxy_set_header X-Forwarded-Proto \\\$scheme;
+                      proxy_cache_bypass \\\$http_upgrade;
+                      proxy_read_timeout 86400;
+                      proxy_connect_timeout 60s;
+                      proxy_send_timeout 60s;
+                  }
+              }
+              NGINX_HTTPS_EOF"
+
+              # Test and reload Nginx
+              if sudo nginx -t && sudo systemctl reload nginx; then
+                echo "HTTPS configuration applied successfully"
+                SSL_SUCCESS=true
+              else
+                echo "Failed to apply HTTPS configuration"
+              fi
+            fi
+          fi
+
+          if [ "$SSL_SUCCESS" = true ]; then
+            echo "SSL certificate installation completed successfully"
+            echo "Application should be accessible at https://$DOMAIN"
+          else
+            echo "SSL certificate installation failed, but deployment continues..."
+            echo "Application is accessible at http://$DOMAIN"
+            echo "You can manually run: sudo certbot --nginx -d $DOMAIN -d www.$DOMAIN"
+            echo "Or check the logs: sudo tail -f /var/log/letsencrypt/letsencrypt.log"
+          fi
+
+          # Set up automatic renewal
+          echo "Setting up automatic SSL renewal..."
+          if command -v crontab > /dev/null 2>&1; then
+            (sudo crontab -l 2>/dev/null; echo "0 12 * * * /usr/bin/certbot renew --quiet --nginx") | sudo crontab -
+            echo "Cron job for SSL renewal added successfully"
+          else
+            echo "Warning: crontab not available, SSL auto-renewal not configured"
+          fi
+
+          # Final status check
+          echo "Final deployment status check..."
+          echo "Nginx status: $(sudo systemctl is-active nginx)"
+          echo "Docker container status:"
+          sg docker -c 'docker ps | grep nestjs-app || echo "Container not running"'
+
+          echo "Deployment completed successfully!"
+          if [ "$SSL_SUCCESS" = true ]; then
+            echo "Application is accessible at https://$DOMAIN"
+          else
+            echo "Application is accessible at http://$DOMAIN"
+          fi
+          EOC
+
+          # Make script executable and copy to EC2
+          chmod +x deploy.sh
+
+          # Copy the script to the EC2 instance
+          scp -o StrictHostKeyChecking=no -i key.pem deploy.sh ec2-user@${EC2_HOST}:~/deploy.sh
+
+          # Create environment file for deployment safely (escape all values)
+          cat > gen_env.sh << 'GEN_EOF'
+          #!/bin/bash
+          set -euo pipefail
+          outfile=$1
+          : > "$outfile"
+          echo '#!/bin/bash' >> "$outfile"
+          vars=(
+            GHCR_TOKEN DOMAIN REPOSITORY_OWNER EMAIL_HOST EMAIL_PORT EMAIL_USER EMAIL_PASSWORD
+            SENDGRID_API_KEY JWT_SECRET LINKEDIN_CLIENT_ID LINKEDIN_CLIENT_SECRET OPENAI_API_KEY
+            AWS_REGION AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_BUCKET_NAME STRIPE_PUBLIC_KEY STRIPE_CLIENT_ID
+            TIKTOK_CLIENT_SECRET STRIPE_SECRET_KEY TIKTOK_CLIENT_KEY TIKTOK_REDIRECT_URI PAYSTACK_PUBLIC_KEY
+            PAYSTACK_SECRET_KEY INSTAGRAM_CLIENT_ID INSTAGRAM_REDIRECT_URI DID_API_KEY ELEVEN_LABS_API_KEY
+            STABILITY_AI_API_KEY YOUTUBE_REDIRECT_URI YOUTUBE_CLIENT_ID YOUTUBE_CLIENT_SECRET INSTAGRAM_CLIENT_SECRET
+            REDIS_URL SYSTEM_YOUTUBE_USER_ID LINKEDIN_REDIRECT_URI_V2 INSTAGRAM_REDIRECT_URI_V2 TIKTOK_REDIRECT_URI_V2
+            YOUTUBE_REDIRECT_URI_V2 TIKTOK_MANAGEMENT_REDIRECT_URI_V2 YOUTUBE_MANAGEMENT_REDIRECT_URI_V2 LINKEDIN_MANAGEMENT_REDIRECT_URI_V2 INSTAGRAM_MANAGEMENT_REDIRECT_URI_V2
+            YOUTUBE_API_KEY PUPPETEER_HEADLESS BROWSER_DEBUG SCRAPING_DELAY_MIN SCRAPING_DELAY_MAX MAX_SCRAPING_ATTEMPTS
+          )
+          for name in "${vars[@]}"; do
+            value="${!name-}"
+            printf 'export %s=%q\n' "$name" "$value" >> "$outfile"
+          done
+          GEN_EOF
+
+          chmod +x gen_env.sh
+          ./gen_env.sh env_vars.sh
+
+          # Make environment file executable and copy to EC2
+          chmod +x env_vars.sh
+          scp -o StrictHostKeyChecking=no -i key.pem env_vars.sh ec2-user@${EC2_HOST}:~/env_vars.sh
+
+          # Execute the script on the EC2 instance
+          ssh -o StrictHostKeyChecking=no -i key.pem ec2-user@${EC2_HOST} "source ~/env_vars.sh && bash ~/deploy.sh"
